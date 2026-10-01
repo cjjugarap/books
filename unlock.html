@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Books</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Books"><meta name="theme-color" content="#8a3b12">
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--ink:#1f1d1a;--muted:#6b6660;--line:#dcd7cd;--accent:#8a3b12}
+@media (prefers-color-scheme:dark){:root{--bg:#171513;--card:#211e1b;--ink:#efeae2;--muted:#a59f95;--line:#3a352f;--accent:#e2a06a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+.c{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:420px;width:100%}
+h1{font-size:22px;margin:0 0 8px}.m{color:var(--muted);font-size:14px}
+input,button{font:inherit;width:100%;min-height:48px;border-radius:10px;border:1px solid var(--line);padding:10px 12px;background:var(--card);color:var(--ink);margin-top:10px}
+button{background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer}
+#msg{min-height:22px;margin-top:10px;font-size:14px}.err{color:#c0392b}
+</style></head><body><div class="c">
+<h1>Books</h1>
+<p class="m" id="sub">This course is locked. Enter your passphrase to open it on this device.</p>
+<form id="f" autocomplete="off"><input id="pw" type="password" placeholder="Passphrase" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Passphrase"><button id="go" type="submit">Unlock</button></form>
+<div id="msg" class="m" role="status"></div>
+</div>
+<script>
+(function(){
+var SCOPE=new URL('./',location.href).href,Q=new URLSearchParams(location.search);
+var $=function(i){return document.getElementById(i)},msg=$('msg');
+function say(t,e){msg.textContent=t;msg.className='m'+(e?' err':'')}
+function idb(){return new Promise(function(res,rej){var r=indexedDB.open('books-lock',1);r.onupgradeneeded=function(){r.result.createObjectStore('k')};r.onsuccess=function(){res(r.result)};r.onerror=function(){rej(r.error)}})}
+function kget(){return idb().then(function(db){return new Promise(function(res){var t=db.transaction('k').objectStore('k').get('key');t.onsuccess=function(){res(t.result||null)};t.onerror=function(){res(null)}})}).catch(function(){return null})}
+function kset(v){return idb().then(function(db){return new Promise(function(res){var t=db.transaction('k','readwrite');if(v)t.objectStore('k').put(v,'key');else t.objectStore('k').delete('key');t.oncomplete=function(){res()};t.onerror=function(){res()}})}).catch(function(){})}
+function derive(pw,salt){return crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']).then(function(km){return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:600000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt'])})}
+function fetchPayload(){return fetch('payload.enc?'+Date.now(),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('download');return r.arrayBuffer()})}
+function decrypt(key,buf){var u=new Uint8Array(buf);if(String.fromCharCode(u[0],u[1],u[2],u[3])!=='BKS1')throw new Error('format');var iv=u.slice(20,32),ct=u.slice(32);return crypto.subtle.decrypt({name:'AES-GCM',iv:iv},key,ct).then(function(p){return new Uint8Array(p)})}
+function install(plain){var dv=new DataView(plain.buffer,plain.byteOffset,plain.byteLength);var hl=dv.getUint32(0,true);var hdr=JSON.parse(new TextDecoder().decode(plain.subarray(4,4+hl)));var base=4+hl;
+  return caches.delete('books-app').then(function(){return caches.open('books-app')}).then(function(c){var i=0;function next(){if(i>=hdr.files.length)return Promise.resolve();var f=hdr.files[i++];return c.put(SCOPE+f.p,new Response(plain.slice(base+f.o,base+f.o+f.l),{headers:{'Content-Type':f.t}})).then(next)}return next()})}
+function ensureSW(){if(!('serviceWorker' in navigator))return Promise.reject(new Error('This browser cannot keep the course offline.'));return navigator.serviceWorker.register('sw.js').then(function(){return navigator.serviceWorker.ready})}
+function finish(){say('Opening…');location.replace('index.html?'+Date.now())}
+async function unlockWith(key,buf,remember){var plain=await decrypt(key,buf);say('Saving for offline use…');await ensureSW();await install(plain);if(remember)await kset(key);finish()}
+async function tryStored(){var key=await kget();if(!key)return false;try{say('Updating…');var buf=await fetchPayload();await unlockWith(key,buf,false);return true}catch(e){return false}}
+async function doLock(){await caches.delete('books-app');await kset(null);say('Locked. The course files were removed from this device. Your notes and photos were kept.');}
+$('f').addEventListener('submit',async function(ev){ev.preventDefault();var pw=$('pw').value;if(!pw){say('Enter the passphrase.',true);return}
+  $('go').disabled=true;say('Checking… this takes a few seconds.');
+  try{var buf=await fetchPayload();var salt=new Uint8Array(buf).slice(4,20);var key=await derive(pw,salt);await unlockWith(key,buf,true)}
+  catch(e){$('go').disabled=false;if(e&&e.name==='OperationError'){say('That passphrase did not work.',true)}else{say('Could not finish: '+(e&&e.message||'error')+'. Check your connection and try again.',true)}}
+});
+(async function(){
+  if(Q.get('lock')){await doLock();return}
+  if(Q.get('update')){var ok=await tryStored();if(!ok){say('Enter the passphrase to update.')}return}
+  var has=await caches.has('books-app');
+  if(has&&!Q.get('stay')&&!sessionStorage.getItem('bk')){try{sessionStorage.setItem('bk','1')}catch(e){}location.replace('index.html?'+Date.now())}
+})();
+})();
+</script></body></html>
