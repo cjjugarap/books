@@ -26,14 +26,26 @@ function idb(){return new Promise(function(res,rej){var r=indexedDB.open('books-
 function kget(){return idb().then(function(db){return new Promise(function(res){var t=db.transaction('k').objectStore('k').get('key');t.onsuccess=function(){res(t.result||null)};t.onerror=function(){res(null)}})}).catch(function(){return null})}
 function kset(v){return idb().then(function(db){return new Promise(function(res){var t=db.transaction('k','readwrite');if(v)t.objectStore('k').put(v,'key');else t.objectStore('k').delete('key');t.oncomplete=function(){res()};t.onerror=function(){res()}})}).catch(function(){})}
 function derive(pw,salt){return crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']).then(function(km){return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:600000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt'])})}
-function fetchPayload(){return fetch('payload.enc?'+Date.now(),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('download');return r.arrayBuffer()})}
+var lastTag='';
+function tagOf(r,n){return (r.headers.get('etag')||r.headers.get('last-modified')||'')+'|'+(n!=null?n:r.headers.get('content-length')||'')}
+function fetchPayload(){return fetch('payload.enc?'+Date.now(),{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('download');lastTag=tagOf(r);return r.arrayBuffer()})}
+function saveTag(){try{if(lastTag)localStorage.setItem('books-tag',lastTag)}catch(e){}}
 function decrypt(key,buf){var u=new Uint8Array(buf);if(String.fromCharCode(u[0],u[1],u[2],u[3])!=='BKS1')throw new Error('format');var iv=u.slice(20,32),ct=u.slice(32);return crypto.subtle.decrypt({name:'AES-GCM',iv:iv},key,ct).then(function(p){return new Uint8Array(p)})}
 function install(plain){var dv=new DataView(plain.buffer,plain.byteOffset,plain.byteLength);var hl=dv.getUint32(0,true);var hdr=JSON.parse(new TextDecoder().decode(plain.subarray(4,4+hl)));var base=4+hl;
   return caches.delete('books-app').then(function(){return caches.open('books-app')}).then(function(c){var i=0;function next(){if(i>=hdr.files.length)return Promise.resolve();var f=hdr.files[i++];return c.put(SCOPE+f.p,new Response(plain.slice(base+f.o,base+f.o+f.l),{headers:{'Content-Type':f.t}})).then(next)}return next()})}
 function ensureSW(){if(!('serviceWorker' in navigator))return Promise.reject(new Error('This browser cannot keep the course offline.'));return navigator.serviceWorker.register('sw.js').then(function(){return navigator.serviceWorker.ready})}
 function finish(){say('Opening…');location.replace('index.html?'+Date.now())}
-async function unlockWith(key,buf,remember){var plain=await decrypt(key,buf);say('Saving for offline use…');await ensureSW();await install(plain);if(remember)await kset(key);finish()}
+async function unlockWith(key,buf,remember,quiet){var plain=await decrypt(key,buf);if(!quiet)say('Saving for offline use…');await ensureSW();await install(plain);if(remember)await kset(key);saveTag();if(!quiet)finish()}
 async function tryStored(){var key=await kget();if(!key)return false;try{say('Updating…');var buf=await fetchPayload();await unlockWith(key,buf,false);return true}catch(e){return false}}
+function tell(m){try{parent.postMessage({books:m},location.origin)}catch(e){}}
+async function silentUpdate(){
+  try{var key=await kget();if(!key){tell('needs');return}
+    var h=await fetch('payload.enc?'+Date.now(),{method:'HEAD',cache:'no-store'});if(!h.ok){tell('offline');return}
+    var tag=tagOf(h),old='';try{old=localStorage.getItem('books-tag')||''}catch(e){}
+    if(old&&tag===old){tell('current');return}
+    var buf=await fetchPayload();await unlockWith(key,buf,false,true);tell('updated')}
+  catch(e){tell('failed')}
+}
 async function doLock(){await caches.delete('books-app');await kset(null);say('Locked. The course files were removed from this device. Your notes and photos were kept.');}
 $('f').addEventListener('submit',async function(ev){ev.preventDefault();var pw=$('pw').value;if(!pw){say('Enter the passphrase.',true);return}
   $('go').disabled=true;say('Checking… this takes a few seconds.');
@@ -41,6 +53,7 @@ $('f').addEventListener('submit',async function(ev){ev.preventDefault();var pw=$
   catch(e){$('go').disabled=false;if(e&&e.name==='OperationError'){say('That passphrase did not work.',true)}else{say('Could not finish: '+(e&&e.message||'error')+'. Check your connection and try again.',true)}}
 });
 (async function(){
+  if(Q.get('silent')){await silentUpdate();return}
   if(Q.get('lock')){await doLock();return}
   if(Q.get('update')){var ok=await tryStored();if(!ok){say('Enter the passphrase to update.')}return}
   var has=await caches.has('books-app');
