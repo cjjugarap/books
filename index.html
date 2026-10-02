@@ -43,8 +43,8 @@ async function silentUpdate(){
     var h=await fetch('payload.enc?'+Date.now(),{method:'HEAD',cache:'no-store'});if(!h.ok){tell('offline');return}
     var tag=tagOf(h),old='';try{old=localStorage.getItem('books-tag')||''}catch(e){}
     if(old&&tag===old){tell('current');return}
-    var buf=await fetchPayload();await unlockWith(key,buf,false,true);tell('updated')}
-  catch(e){tell('failed')}
+    tell('updating');var buf=await fetchPayload();await unlockWith(key,buf,false,true);tell('updated')}
+  catch(e){tell('failed:'+(e&&e.message?e.message:(e&&e.name)||'error'))}
 }
 async function doLock(){await caches.delete('books-app');await kset(null);say('Locked. The course files were removed from this device. Your notes and photos were kept.');}
 $('f').addEventListener('submit',async function(ev){ev.preventDefault();var pw=$('pw').value;if(!pw){say('Enter the passphrase.',true);return}
